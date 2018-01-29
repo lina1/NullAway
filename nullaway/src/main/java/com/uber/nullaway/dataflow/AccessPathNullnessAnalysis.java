@@ -19,6 +19,12 @@
 package com.uber.nullaway.dataflow;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Sets;
+import com.sun.source.tree.BlockTree;
+import com.sun.source.tree.MethodTree;
+import com.sun.source.tree.StatementTree;
+import com.sun.source.tree.Tree;
+import com.sun.source.tree.TryTree;
 import com.sun.source.util.TreePath;
 import com.sun.tools.javac.code.Types;
 import com.sun.tools.javac.util.Context;
@@ -27,6 +33,7 @@ import com.uber.nullaway.Nullness;
 import com.uber.nullaway.handlers.Handler;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
@@ -105,7 +112,45 @@ public final class AccessPathNullnessAnalysis {
       // be conservative and say nothing is initialized
       return Collections.emptySet();
     }
-    return getNonnullReceiverFields(nullnessResult);
+    Set<Element> result = getNonnullReceiverFields(nullnessResult);
+    if (methodEndingInTryFinally(path.getLeaf())) {
+      // if the method ends in a try-finally block, let's assume that any
+      // field initialized at the end of the try block is nonnull at exit.
+      // this is unsound, but consistent with our general policy of ignoring most exceptional
+      // control flow
+      result = Sets.union(result, getNonnullReceiverFieldsAtEndOfTryBlock(path, context));
+    }
+    return result;
+  }
+
+  private Set<Element> getNonnullReceiverFieldsAtEndOfTryBlock(TreePath path, Context context) {
+    BlockTree body = ((MethodTree) path.getLeaf()).getBody();
+    TryTree tryFinally = (TryTree) getLastStmtInBlock(body);
+    BlockTree tryBlock = tryFinally.getBlock();
+    StatementTree lastTryBlockStmt = getLastStmtInBlock(tryBlock);
+    TreePath finalPath =
+        new TreePath(
+            new TreePath(new TreePath(new TreePath(path, body), tryFinally), tryBlock),
+            lastTryBlockStmt);
+    NullnessStore<Nullness> store = dataFlow.storeAfter(finalPath, context, nullnessPropagation);
+    if (store == null) {
+      return Collections.emptySet();
+    }
+    return getNonnullReceiverFields(store);
+  }
+
+  private boolean methodEndingInTryFinally(Tree tree) {
+    if (!(tree instanceof MethodTree)) {
+      return false;
+    }
+    MethodTree mt = (MethodTree) tree;
+    StatementTree lastStmt = getLastStmtInBlock(mt.getBody());
+    return (lastStmt instanceof TryTree) && (((TryTree) lastStmt).getFinallyBlock() != null);
+  }
+
+  private StatementTree getLastStmtInBlock(BlockTree blockTree) {
+    List<? extends StatementTree> statements = blockTree.getStatements();
+    return statements.get(statements.size() - 1);
   }
 
   private Set<Element> getNonnullReceiverFields(NullnessStore<Nullness> nullnessResult) {
@@ -131,7 +176,7 @@ public final class AccessPathNullnessAnalysis {
    * @return fields of receiver guaranteed to be nonnull before expression is evaluated
    */
   public Set<Element> getNonnullFieldsOfReceiverBefore(TreePath path, Context context) {
-    NullnessStore<Nullness> store = dataFlow.resultBeforeExpr(path, context, nullnessPropagation);
+    NullnessStore<Nullness> store = dataFlow.storeBefore(path, context, nullnessPropagation);
     if (store == null) {
       return Collections.emptySet();
     }
@@ -144,7 +189,7 @@ public final class AccessPathNullnessAnalysis {
    * @return static fields guaranteed to be nonnull before expression is evaluated
    */
   public Set<Element> getNonnullStaticFieldsBefore(TreePath path, Context context) {
-    NullnessStore<Nullness> store = dataFlow.resultBeforeExpr(path, context, nullnessPropagation);
+    NullnessStore<Nullness> store = dataFlow.storeBefore(path, context, nullnessPropagation);
     if (store == null) {
       return Collections.emptySet();
     }

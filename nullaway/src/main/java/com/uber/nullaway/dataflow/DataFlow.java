@@ -156,7 +156,12 @@ public final class DataFlow {
   @Nullable
   public <A extends AbstractValue<A>, S extends Store<S>, T extends TransferFunction<A, S>>
       A expressionDataflow(TreePath exprPath, Context context, T transfer) {
-    AnalysisResult<A, S> analysisResult = resultForExpr(exprPath, context, transfer);
+    final Tree leaf = exprPath.getLeaf();
+    Preconditions.checkArgument(
+        leaf instanceof ExpressionTree,
+        "Leaf of exprPath must be of type ExpressionTree, but was %s",
+        leaf.getClass().getName());
+    AnalysisResult<A, S> analysisResult = resultForEnclosing(exprPath, context, transfer);
     return analysisResult == null ? null : analysisResult.getValue(exprPath.getLeaf());
   }
 
@@ -185,23 +190,28 @@ public final class DataFlow {
 
   @Nullable
   public <A extends AbstractValue<A>, S extends Store<S>, T extends TransferFunction<A, S>>
-      S resultBeforeExpr(TreePath exprPath, Context context, T transfer) {
-    AnalysisResult<A, S> analysisResult = resultForExpr(exprPath, context, transfer);
-    return analysisResult == null ? null : analysisResult.getStoreBefore(exprPath.getLeaf());
+      S storeBefore(TreePath path, Context context, T transfer) {
+    AnalysisResult<A, S> analysisResult = resultForEnclosing(path, context, transfer);
+    return analysisResult == null ? null : analysisResult.getStoreBefore(path.getLeaf());
   }
 
   @Nullable
-  private <A extends AbstractValue<A>, S extends Store<S>, T extends TransferFunction<A, S>>
-      AnalysisResult<A, S> resultForExpr(TreePath exprPath, Context context, T transfer) {
-    final Tree leaf = exprPath.getLeaf();
-    Preconditions.checkArgument(
-        leaf instanceof ExpressionTree,
-        "Leaf of exprPath must be of type ExpressionTree, but was %s",
-        leaf.getClass().getName());
+  public <A extends AbstractValue<A>, S extends Store<S>, T extends TransferFunction<A, S>>
+      S storeAfter(TreePath path, Context context, T transfer) {
+    AnalysisResult<A, S> analysisResult = resultForEnclosing(path, context, transfer);
+    return analysisResult == null ? null : analysisResult.getStoreAfter(path.getLeaf());
+  }
 
-    final ExpressionTree expr = (ExpressionTree) leaf;
-    final TreePath enclosingPath =
-        NullabilityUtil.findEnclosingMethodOrLambdaOrInitializer(exprPath);
+  /**
+   * @param path path to AST node
+   * @param context javac context
+   * @param transfer transfer functions
+   * @return dataflow result for method / lambda / initializer enclosing the leaf of the path
+   */
+  @Nullable
+  private <A extends AbstractValue<A>, S extends Store<S>, T extends TransferFunction<A, S>>
+      AnalysisResult<A, S> resultForEnclosing(TreePath path, Context context, T transfer) {
+    final TreePath enclosingPath = NullabilityUtil.findEnclosingMethodOrLambdaOrInitializer(path);
     if (enclosingPath == null) {
       throw new RuntimeException("expression is not inside a method, lambda or initializer block!");
     }
