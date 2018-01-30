@@ -21,6 +21,8 @@ package com.uber.nullaway.dataflow;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
 import com.sun.source.tree.BlockTree;
+import com.sun.source.tree.ExpressionStatementTree;
+import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.StatementTree;
 import com.sun.source.tree.Tree;
@@ -126,12 +128,23 @@ public final class AccessPathNullnessAnalysis {
   private Set<Element> getNonnullReceiverFieldsAtEndOfTryBlock(TreePath path, Context context) {
     BlockTree body = ((MethodTree) path.getLeaf()).getBody();
     TryTree tryFinally = (TryTree) getLastStmtInBlock(body);
+    assert tryFinally != null;
     BlockTree tryBlock = tryFinally.getBlock();
     StatementTree lastTryBlockStmt = getLastStmtInBlock(tryBlock);
-    TreePath finalPath =
-        new TreePath(
-            new TreePath(new TreePath(new TreePath(path, body), tryFinally), tryBlock),
-            lastTryBlockStmt);
+    TreePath tryFinallyPath = new TreePath(new TreePath(path, body), tryFinally);
+    // if there are no statements in the try block, we use the path to the try-finally
+    // itself, which Checker associates with the program point *before* the try in
+    // the CFG.  I *think* that should correspond to the end of the (empty) try block
+    // in terms of dataflow facts
+    TreePath finalPath;
+    if (lastTryBlockStmt != null) {
+      ExpressionTree expression = ((ExpressionStatementTree) lastTryBlockStmt).getExpression();
+      finalPath =
+          new TreePath(
+              new TreePath(new TreePath(tryFinallyPath, tryBlock), lastTryBlockStmt), expression);
+    } else {
+      finalPath = tryFinallyPath;
+    }
     NullnessStore<Nullness> store = dataFlow.storeAfter(finalPath, context, nullnessPropagation);
     if (store == null) {
       return Collections.emptySet();
@@ -145,12 +158,15 @@ public final class AccessPathNullnessAnalysis {
     }
     MethodTree mt = (MethodTree) tree;
     StatementTree lastStmt = getLastStmtInBlock(mt.getBody());
-    return (lastStmt instanceof TryTree) && (((TryTree) lastStmt).getFinallyBlock() != null);
+    return (lastStmt != null)
+        && (lastStmt instanceof TryTree)
+        && (((TryTree) lastStmt).getFinallyBlock() != null);
   }
 
+  @Nullable
   private StatementTree getLastStmtInBlock(BlockTree blockTree) {
     List<? extends StatementTree> statements = blockTree.getStatements();
-    return statements.get(statements.size() - 1);
+    return statements.isEmpty() ? null : statements.get(statements.size() - 1);
   }
 
   private Set<Element> getNonnullReceiverFields(NullnessStore<Nullness> nullnessResult) {

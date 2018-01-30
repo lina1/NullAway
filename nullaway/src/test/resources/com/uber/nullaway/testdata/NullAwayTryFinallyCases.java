@@ -222,12 +222,14 @@ public class NullAwayTryFinallyCases {
     Object g;
 
     /// ToDo: Fix or work-around for this one.
-    // BUG: Diagnostic contains: initializer method does not guarantee @NonNull field g is
-    // initialized
     Initializers() {
       f = new Object();
       try {
-        g = new Object();
+        if (f == null) {
+          g = new Object();
+        } else {
+          g = new Object();
+        }
       } finally {
         System.out.println("No-op");
       }
